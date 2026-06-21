@@ -1,0 +1,13 @@
+[package]
+name = "rust-log-normalizer"
+version = "0.1.0"
+edition = "2021"
+description = "A TCP service that normalizes RFC 3164 syslog and NDJSON event streams into a common format."
+
+[[bin]]
+name = "rust-log-normalizer"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util"] }
