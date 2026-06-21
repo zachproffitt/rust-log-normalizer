@@ -1,0 +1,56 @@
+{
+  "System": {
+    "Provider": {
+      "Name": "Microsoft-Windows-Security-Auditing",
+      "Guid": "{54849625-5478-4994-a5ba-3e3b0328c30d}"
+    },
+    "EventID": 4688,
+    "Version": 2,
+    "Level": 0,
+    "Task": 13312,
+    "Keywords": "0x8020000000000000",
+    "TimeCreated": "2026-02-14T16:06:51.0643605Z",
+    "EventRecordID": 114689,
+    "Execution": {
+      "ProcessID": 4,
+      "ThreadID": 196
+    },
+    "Channel": "Security",
+    "Computer": "dc01.contoso.local"
+  },
+  "EventData": {
+    "CommandLine": "svchost.exe -k netsvcs -p",
+    "NewProcessId": "0x1a8c",
+    "NewProcessName": "C:\\Windows\\System32\\svchost.exe",
+    "ParentProcessName": "C:\\Windows\\System32\\services.exe",
+    "ProcessId": "0x240",
+    "SubjectDomainName": "CONTOSO",
+    "SubjectLogonId": "0x3e7",
+    "SubjectUserName": "DC01$",
+    "SubjectUserSid": "S-1-5-18",
+    "TargetUserName": "-",
+    "TargetUserSid": "S-1-0-0"
+  },
+  "RenderingInfo": {
+    "Message": "A new process has been created.",
+    "Level": "Information",
+    "Task": "Process Creation",
+    "Opcode": "Info",
+    "Channel": "Security",
+    "Provider": "Microsoft Windows security auditing.",
+    "Keywords": ["Audit Success"],
+    "Culture": "en-US"
+  },
+  "OpenWEC": {
+    "IpAddress": "192.168.1.10",
+    "TimeReceived": "2026-02-14T16:07:03.331+00:00",
+    "Principal": "DC01$@CONTOSO.LOCAL",
+    "Node": "openwec-01",
+    "Subscription": {
+      "Uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "Version": "1",
+      "Name": "windows-events",
+      "Uri": "/wsman/subscriptions/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "System": {
+    "Provider": {
+      "Name": "Microsoft-Windows-Security-Auditing",
+      "Guid": "{54849625-5478-4994-a5ba-3e3b0328c30d}"
+    },
+    "EventID": 4625,
+    "Version": 0,
+    "Level": 0,
+    "Task": 12544,
+    "Keywords": "0x8010000000000000",
+    "TimeCreated": "2026-02-14T15:45:33.2210900Z",
+    "EventRecordID": 114610,
+    "Correlation": {},
+    "Execution": {
+      "ProcessID": 636,
+      "ThreadID": 2048
+    },
+    "Channel": "Security",
+    "Computer": "dc01.contoso.local"
+  },
+  "EventData": {
+    "SubjectUserSid": "S-1-0-0",
+    "SubjectUserName": "-",
+    "SubjectDomainName": "-",
+    "SubjectLogonId": "0x0",
+    "TargetUserSid": "S-1-0-0",
+    "TargetUserName": "admin",
+    "TargetDomainName": "CONTOSO",
+    "Status": "0xc000006d",
+    "FailureReason": "%%2313",
+    "SubStatus": "0xc000006a",
+    "LogonType": "3",
+    "LogonProcessName": "NtLmSsp",
+    "AuthenticationPackageName": "NTLM",
+    "WorkstationName": "ATTACKER-PC",
+    "IpAddress": "10.99.0.55",
+    "IpPort": "44221"
+  },
+  "RenderingInfo": {
+    "Message": "An account failed to log on.",
+    "Level": "Information",
+    "Task": "Logon",
+    "Opcode": "Info",
+    "Channel": "Security",
+    "Provider": "Microsoft Windows security auditing.",
+    "Keywords": ["Audit Failure"],
+    "Culture": "en-US"
+  },
+  "OpenWEC": {
+    "IpAddress": "192.168.1.10",
+    "TimeReceived": "2026-02-14T15:46:02.889+00:00",
+    "Principal": "DC01$@CONTOSO.LOCAL",
+    "Node": "openwec-01",
+    "Subscription": {
+      "Uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "Version": "1",
+      "Name": "windows-events",
+      "Uri": "/wsman/subscriptions/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    }
+  }
+}

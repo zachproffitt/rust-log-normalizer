@@ -1,0 +1,61 @@
+{
+  "System": {
+    "Provider": {
+      "Name": "Microsoft-Windows-Security-Auditing",
+      "Guid": "{54849625-5478-4994-a5ba-3e3b0328c30d}"
+    },
+    "EventID": 4624,
+    "Version": 2,
+    "Level": 0,
+    "Task": 12544,
+    "Keywords": "0x8020000000000000",
+    "TimeCreated": "2026-02-14T14:22:10.8831200Z",
+    "EventRecordID": 114502,
+    "Execution": {
+      "ProcessID": 636,
+      "ThreadID": 1204
+    },
+    "Channel": "Security",
+    "Computer": "dc01.contoso.local"
+  },
+  "EventData": {
+    "SubjectUserSid": "S-1-0-0",
+    "SubjectUserName": "-",
+    "SubjectDomainName": "-",
+    "SubjectLogonId": "0x0",
+    "TargetUserSid": "S-1-5-21-3623811015-3361044348-30300820-1013",
+    "TargetUserName": "jsmith",
+    "TargetDomainName": "CONTOSO",
+    "TargetLogonId": "0x1a2b3c",
+    "LogonType": "10",
+    "LogonProcessName": "User32",
+    "AuthenticationPackageName": "Negotiate",
+    "WorkstationName": "WS042",
+    "IpAddress": "10.0.50.42",
+    "IpPort": "51847",
+    "ProcessId": "0x27c",
+    "ProcessName": "C:/Windows/System32/svchost.exe"
+  },
+  "RenderingInfo": {
+    "Message": "An account was successfully logged on.",
+    "Level": "Information",
+    "Task": "Logon",
+    "Opcode": "Info",
+    "Channel": "Security",
+    "Provider": "Microsoft Windows security auditing.",
+    "Keywords": ["Audit Success"],
+    "Culture": "en-US"
+  },
+  "OpenWEC": {
+    "IpAddress": "192.168.1.10",
+    "TimeReceived": "2026-02-14T14:23:01.112+00:00",
+    "Principal": "DC01$@CONTOSO.LOCAL",
+    "Node": "openwec-01",
+    "Subscription": {
+      "Uuid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "Version": "1",
+      "Name": "windows-events",
+      "Uri": "/wsman/subscriptions/a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    }
+  }
+}

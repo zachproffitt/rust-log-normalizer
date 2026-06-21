@@ -21,3 +21,4 @@ target
 #.idea/
 
 *.code-workspace
+.DS_Store
