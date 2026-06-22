@@ -21,7 +21,7 @@ async fn main() -> std::io::Result<()> {
 
     let addr = SocketAddr::from(([0, 0, 0, 0], cli.port));
     let listener = TcpListener::bind(addr).await?;
-    println!("listening on {addr}");
+    eprintln!("listening on {addr}");
 
     loop {
         let (stream, peer) = listener.accept().await?;

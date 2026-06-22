@@ -17,7 +17,7 @@ use crate::transform;
 
 /// Drives a single accepted connection to completion (EOF or read error).
 pub async fn run_connection(stream: TcpStream, peer: SocketAddr) -> std::io::Result<()> {
-    println!("accepted connection from {peer}");
+    eprintln!("accepted connection from {peer}");
 
     let reader = BufReader::new(stream);
     let mut lines = reader.lines();
@@ -35,7 +35,7 @@ pub async fn run_connection(stream: TcpStream, peer: SocketAddr) -> std::io::Res
             Some(fmt) => fmt,
             None => match format::detect(&line) {
                 Some(detected) => {
-                    println!("connection {peer} locked to format {detected:?}");
+                    eprintln!("connection {peer} locked to format {detected:?}");
                     format = Some(detected);
                     detected
                 }
@@ -48,11 +48,18 @@ pub async fn run_connection(stream: TcpStream, peer: SocketAddr) -> std::io::Res
             },
         };
 
-        if let Err(err) = transform::transform(fmt, &line) {
-            eprintln!("connection {peer}: failed to transform event ({err}), dropping line");
+        // Normalized records go to stdout (one NDJSON line each); diagnostics to stderr.
+        match transform::transform(fmt, &line) {
+            Ok(event) => match serde_json::to_string(&event) {
+                Ok(json) => println!("{json}"),
+                Err(err) => eprintln!("connection {peer}: failed to serialize event ({err})"),
+            },
+            Err(err) => {
+                eprintln!("connection {peer}: failed to transform event ({err}), dropping line")
+            }
         }
     }
 
-    println!("closed connection from {peer}");
+    eprintln!("closed connection from {peer}");
     Ok(())
 }
