@@ -13,10 +13,15 @@ use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::net::TcpStream;
 
 use crate::format::{self, Format};
+use crate::sink::Sink;
 use crate::transform;
 
 /// Drives a single accepted connection to completion (EOF or read error).
-pub async fn run_connection(stream: TcpStream, peer: SocketAddr) -> std::io::Result<()> {
+pub async fn run_connection(
+    stream: TcpStream,
+    peer: SocketAddr,
+    sink: Sink,
+) -> std::io::Result<()> {
     eprintln!("accepted connection from {peer}");
 
     let reader = BufReader::new(stream);
@@ -48,10 +53,14 @@ pub async fn run_connection(stream: TcpStream, peer: SocketAddr) -> std::io::Res
             },
         };
 
-        // Normalized records go to stdout (one NDJSON line each); diagnostics to stderr.
+        // Normalized records go to the sink (one NDJSON line each); diagnostics to stderr.
         match transform::transform(fmt, &line) {
             Ok(event) => match serde_json::to_string(&event) {
-                Ok(json) => println!("{json}"),
+                Ok(json) => {
+                    if let Err(err) = sink.write_record(&json).await {
+                        eprintln!("connection {peer}: failed to write record ({err})");
+                    }
+                }
                 Err(err) => eprintln!("connection {peer}: failed to serialize event ({err})"),
             },
             Err(err) => {
