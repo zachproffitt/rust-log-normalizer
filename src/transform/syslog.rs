@@ -2,6 +2,11 @@
 //!
 //! Wire shape: `<PRI>Mmm dd HH:MM:SS HOST CEF:0|vendor|product|ver|sigid|name|sev|ext`
 //! where `ext` is space-separated `key=value` pairs (values may contain spaces).
+//!
+//! Parsing is intentionally **lenient**: every syslog line yields an event with
+//! sensible defaults rather than being rejected, matching the spec's "use current
+//! UTC if parsing fails" guidance. RFC 3164 timestamps carry no year or timezone,
+//! so the current year and UTC are assumed.
 
 use std::collections::HashMap;
 
@@ -33,11 +38,14 @@ pub fn parse(raw: &str) -> anyhow::Result<NormalizedEvent> {
         .or_else(|| cef.as_ref().and_then(|c| clean_optional(&c.name)))
         .unwrap_or_else(|| after_pri.trim().to_string());
 
+    // Lowercased once and reused by the keyword classifiers below.
+    let message_lower = message.to_lowercase();
+
     Ok(NormalizedEvent {
         timestamp,
-        event_type: event_type(get("act"), &message),
-        event_category: event_category(cef.as_ref(), &message),
-        event_outcome: outcome(get("act"), get("outcome"), &message),
+        event_type: event_type(get("act"), &message_lower),
+        event_category: event_category(cef.as_ref(), &message_lower),
+        event_outcome: outcome(get("act"), get("outcome"), &message_lower),
         source_ip: get("src").and_then(clean_optional),
         user_name: get("suser").and_then(clean_optional),
         host_name,
@@ -79,20 +87,28 @@ fn parse_timestamp(header_tokens: &[&str]) -> String {
         .to_string()
 }
 
-fn event_type(act: Option<&str>, message: &str) -> EventType {
+/// Per the mapping spec, a CEF `act=` verb takes precedence over message-based
+/// auth classification (`allow`→`Allowed`, `deny`/`block`→`Denied`); only without
+/// a decisive `act` do we fall back to start/end/info from the message.
+///
+/// `message_lower` must already be lowercase. `act` is a short controlled CEF
+/// value, so substring matching on it is safe.
+fn event_type(act: Option<&str>, message_lower: &str) -> EventType {
     if let Some(act) = act {
-        let act = act.to_lowercase();
+        let act = act.to_ascii_lowercase();
         if act.contains("allow") {
             return EventType::Allowed;
         }
-        if act.contains("deny") || act.contains("denied") || act.contains("block") {
+        if act.contains("den") || act.contains("block") {
             return EventType::Denied;
         }
     }
 
-    let msg = message.to_lowercase();
-    if is_auth(&msg) {
-        if msg.contains("logoff") || msg.contains("logout") || msg.contains("log off") {
+    if is_auth(message_lower) {
+        if message_lower.contains("logoff")
+            || message_lower.contains("logout")
+            || message_lower.contains("log off")
+        {
             EventType::End
         } else {
             EventType::Start
@@ -102,8 +118,8 @@ fn event_type(act: Option<&str>, message: &str) -> EventType {
     }
 }
 
-fn event_category(cef: Option<&CefMessage>, message: &str) -> EventCategory {
-    let mut haystack = message.to_lowercase();
+fn event_category(cef: Option<&CefMessage>, message_lower: &str) -> EventCategory {
+    let mut haystack = String::from(message_lower);
     if let Some(cef) = cef {
         haystack.push(' ');
         haystack.push_str(&cef.signature_id.to_lowercase());
@@ -113,42 +129,51 @@ fn event_category(cef: Option<&CefMessage>, message: &str) -> EventCategory {
 
     if is_auth(&haystack) {
         EventCategory::Authentication
-    } else if haystack.contains("traffic") || haystack.contains("connection") {
+    } else if has_token_prefix(&haystack, &["traffic", "connection", "network", "flow"]) {
         EventCategory::Network
     } else {
         EventCategory::Host
     }
 }
 
-fn outcome(act: Option<&str>, outcome: Option<&str>, message: &str) -> EventOutcome {
+/// Failure is checked before success so that a denial/failure signal wins when a
+/// message mixes wording. `message_lower` must already be lowercase.
+fn outcome(act: Option<&str>, outcome: Option<&str>, message_lower: &str) -> EventOutcome {
     let haystack = format!(
-        "{} {} {}",
-        act.unwrap_or(""),
-        outcome.unwrap_or(""),
-        message
-    )
-    .to_lowercase();
+        "{} {} {message_lower}",
+        act.unwrap_or("").to_ascii_lowercase(),
+        outcome.unwrap_or("").to_ascii_lowercase(),
+    );
 
-    if haystack.contains("success") || haystack.contains("allow") {
-        EventOutcome::Success
-    } else if haystack.contains("failure")
-        || haystack.contains("fail")
-        || haystack.contains("deny")
-        || haystack.contains("denied")
-        || haystack.contains("block")
-    {
+    if has_token_prefix(
+        &haystack,
+        &["fail", "deny", "denied", "denial", "block", "unsuccess", "error"],
+    ) {
         EventOutcome::Failure
+    } else if has_token_prefix(&haystack, &["success", "succeed", "allow"]) {
+        EventOutcome::Success
     } else {
         EventOutcome::Unknown
     }
 }
 
-/// True when the text carries authentication-related wording (tolerant of the
-/// "logon" / "log on" / "logged on" spelling variants seen in CEF names).
+/// True when the text carries authentication wording. Uses token-prefix matching
+/// (so `success` isn't found inside `unsuccessful`) plus a couple of two-word
+/// phrase checks for the `log on` / `logged on` variants seen in CEF names.
 fn is_auth(haystack: &str) -> bool {
-    ["logon", "login", "log on", "logged on", "auth"]
-        .iter()
-        .any(|kw| haystack.contains(kw))
+    has_token_prefix(haystack, &["logon", "logoff", "login", "logout", "auth"])
+        || haystack.contains("log on")
+        || haystack.contains("logged on")
+}
+
+/// True if any alphanumeric token in `haystack` starts with one of `prefixes`.
+/// `haystack` must already be lowercase. Matching whole tokens (rather than raw
+/// substrings) avoids false positives like `success` inside `unsuccessful`.
+fn has_token_prefix(haystack: &str, prefixes: &[&str]) -> bool {
+    haystack
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .any(|token| prefixes.iter().any(|prefix| token.starts_with(prefix)))
 }
 
 /// Maps a syslog severity (PRI & 7) to its standard name.
@@ -174,21 +199,57 @@ struct CefMessage {
 }
 
 impl CefMessage {
-    /// Parses `CEF:0|vendor|product|ver|sigid|name|sev|ext...`.
+    /// Parses `CEF:0|vendor|product|ver|sigid|name|sev|ext...`, honoring `\|` and
+    /// `\\` escapes in the header fields.
     fn parse(cef: &str) -> Self {
-        let fields: Vec<&str> = cef.splitn(8, '|').collect();
+        let fields = split_cef_header(cef, 8);
+        let field = |i: usize| fields.get(i).map(|s| unescape_header(s)).unwrap_or_default();
         CefMessage {
-            signature_id: fields.get(4).unwrap_or(&"").to_string(),
-            name: fields.get(5).unwrap_or(&"").to_string(),
-            extensions: parse_extensions(fields.get(7).unwrap_or(&"")),
+            signature_id: field(4),
+            name: field(5),
+            extensions: parse_extensions(fields.get(7).map(String::as_str).unwrap_or("")),
         }
     }
+}
+
+/// Splits a CEF message on **unescaped** `|` into at most `max_parts` fields.
+/// Backslash escapes are preserved in the returned fields (callers unescape the
+/// pieces they use); the final field keeps the remainder verbatim, which is the
+/// extension string that [`parse_extensions`] parses with its own escaping rules.
+fn split_cef_header(cef: &str, max_parts: usize) -> Vec<String> {
+    let mut fields = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+
+    for c in cef.chars() {
+        if fields.len() + 1 == max_parts {
+            current.push(c); // remainder (the extension) is taken verbatim
+            continue;
+        }
+        if escaped {
+            current.push('\\');
+            current.push(c);
+            escaped = false;
+        } else if c == '\\' {
+            escaped = true;
+        } else if c == '|' {
+            fields.push(std::mem::take(&mut current));
+        } else {
+            current.push(c);
+        }
+    }
+    if escaped {
+        current.push('\\');
+    }
+    fields.push(current);
+    fields
 }
 
 /// Parses CEF extensions, which are space-separated `key=value` pairs whose
 /// values may themselves contain spaces. A token of the form `key=...` (with an
 /// alphanumeric key) starts a new field; any following token without such a
-/// prefix is appended to the current value.
+/// prefix is appended to the current value. Values are unescaped (`\=`, `\\`,
+/// `\n`, `\r`).
 fn parse_extensions(ext: &str) -> HashMap<String, String> {
     let mut map = HashMap::new();
     let mut current: Option<String> = None;
@@ -196,13 +257,13 @@ fn parse_extensions(ext: &str) -> HashMap<String, String> {
     for token in ext.split_whitespace() {
         match token.find('=').map(|eq| (&token[..eq], &token[eq + 1..])) {
             Some((key, value)) if is_key(key) => {
-                map.insert(key.to_string(), value.to_string());
+                map.insert(key.to_string(), unescape_ext(value));
                 current = Some(key.to_string());
             }
             _ => {
                 if let Some(value) = current.as_ref().and_then(|k| map.get_mut(k)) {
                     value.push(' ');
-                    value.push_str(token);
+                    value.push_str(&unescape_ext(token));
                 }
             }
         }
@@ -213,6 +274,42 @@ fn parse_extensions(ext: &str) -> HashMap<String, String> {
 
 fn is_key(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())
+}
+
+/// Unescapes a CEF header field: `\|` → `|`, `\\` → `\`.
+fn unescape_header(s: &str) -> String {
+    unescape(s, |c| matches!(c, '|' | '\\').then_some(c))
+}
+
+/// Unescapes a CEF extension value: `\=` → `=`, `\\` → `\`, `\n`/`\r` → newline/CR.
+fn unescape_ext(s: &str) -> String {
+    unescape(s, |c| match c {
+        '=' | '\\' => Some(c),
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        _ => None,
+    })
+}
+
+/// Generic backslash-unescaper. `map` resolves the character after a backslash;
+/// an unrecognized escape keeps the following character literally.
+fn unescape(s: &str, map: impl Fn(char) -> Option<char>) -> String {
+    if !s.contains('\\') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars();
+    while let Some(c) = chars.next() {
+        if c == '\\' {
+            match chars.next() {
+                Some(next) => out.push(map(next).unwrap_or(next)),
+                None => out.push('\\'),
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -282,5 +379,43 @@ mod tests {
         let (pri, rest) = strip_pri("no pri here");
         assert_eq!(pri, 13);
         assert_eq!(rest, "no pri here");
+    }
+
+    #[test]
+    fn outcome_not_fooled_by_substring() {
+        // "unsuccessful" must not match the "success" keyword.
+        assert_eq!(outcome(None, None, "logon was unsuccessful"), EventOutcome::Failure);
+        // "success" as a real token is success.
+        assert_eq!(outcome(None, None, "operation success"), EventOutcome::Success);
+    }
+
+    #[test]
+    fn outcome_failure_wins_over_success_wording() {
+        assert_eq!(
+            outcome(Some("deny"), Some("failure"), "access denied"),
+            EventOutcome::Failure
+        );
+    }
+
+    #[test]
+    fn token_prefix_matches_whole_tokens_only() {
+        assert!(has_token_prefix("an account failed", &["fail"]));
+        assert!(!has_token_prefix("unsuccessful attempt", &["success"]));
+    }
+
+    #[test]
+    fn cef_header_respects_escaped_pipe() {
+        // The name field contains an escaped pipe and should not split there.
+        let cef = r"CEF:0|vendor|product|1.0|100|blocked \| dropped|5|src=9.9.9.9";
+        let parsed = CefMessage::parse(cef);
+        assert_eq!(parsed.name, "blocked | dropped");
+        assert_eq!(parsed.extensions.get("src").map(String::as_str), Some("9.9.9.9"));
+    }
+
+    #[test]
+    fn cef_extension_value_unescapes() {
+        let ext = parse_extensions(r"msg=a\=b act=deny");
+        assert_eq!(ext.get("msg").map(String::as_str), Some("a=b"));
+        assert_eq!(ext.get("act").map(String::as_str), Some("deny"));
     }
 }

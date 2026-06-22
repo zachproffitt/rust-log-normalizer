@@ -10,6 +10,7 @@ use anyhow::Context;
 use tokio::io::{AsyncWrite, AsyncWriteExt, BufWriter};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
+use tracing::error;
 
 /// Upper bound on how many records the consumer coalesces into one flush, so a
 /// sustained burst can't grow the write buffer without limit.
@@ -59,11 +60,16 @@ pub async fn spawn(output: &str, capacity: usize) -> anyhow::Result<(SinkHandle,
 
 /// Drains the channel until all senders are dropped, batching writes and flushing
 /// once per drained burst.
+///
+/// A write or flush error stops the consumer: the receiver is dropped, which
+/// closes the channel so producers see a clear error (and connections close)
+/// rather than the sink silently discarding records forever.
 async fn consume(mut writer: Box<dyn AsyncWrite + Send + Unpin>, mut rx: mpsc::Receiver<Vec<String>>) {
-    while let Some(first) = rx.recv().await {
+    'drain: while let Some(first) = rx.recv().await {
         let mut written = 0usize;
         if let Err(err) = write_batch(&mut writer, &first, &mut written).await {
-            eprintln!("sink: write failed ({err})");
+            error!(%err, "sink write failed; stopping sink, further records will be rejected");
+            break 'drain;
         }
 
         // Coalesce any batches that are already queued into the same flush.
@@ -71,7 +77,8 @@ async fn consume(mut writer: Box<dyn AsyncWrite + Send + Unpin>, mut rx: mpsc::R
             match rx.try_recv() {
                 Ok(batch) => {
                     if let Err(err) = write_batch(&mut writer, &batch, &mut written).await {
-                        eprintln!("sink: write failed ({err})");
+                        error!(%err, "sink write failed; stopping sink, further records will be rejected");
+                        break 'drain;
                     }
                 }
                 Err(_) => break,
@@ -79,14 +86,13 @@ async fn consume(mut writer: Box<dyn AsyncWrite + Send + Unpin>, mut rx: mpsc::R
         }
 
         if let Err(err) = writer.flush().await {
-            eprintln!("sink: flush failed ({err})");
+            error!(%err, "sink flush failed; stopping sink, further records will be rejected");
+            break 'drain;
         }
     }
 
-    // All producers gone: flush whatever the writer still buffers.
-    if let Err(err) = writer.flush().await {
-        eprintln!("sink: final flush failed ({err})");
-    }
+    // Best-effort final flush of anything already written (no-op if we stopped on error).
+    let _ = writer.flush().await;
 }
 
 /// Writes every record in `batch` as one NDJSON line, advancing `written`.
@@ -105,11 +111,56 @@ async fn write_batch(
 
 #[cfg(test)]
 mod tests {
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
+
     use super::*;
+
+    /// An `AsyncWrite` whose every write fails, for exercising sink error paths.
+    struct FailingWriter;
+
+    impl AsyncWrite for FailingWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &[u8],
+        ) -> Poll<std::io::Result<usize>> {
+            Poll::Ready(Err(std::io::Error::other("write boom")))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
 
     #[tokio::test]
     async fn stdout_sink_spawns() {
         let (_handle, _join) = spawn("-", 8).await.expect("stdout sink");
+    }
+
+    #[tokio::test]
+    async fn write_failure_stops_sink_and_rejects_further_records() {
+        let (tx, rx) = mpsc::channel::<Vec<String>>(1);
+        let consumer = tokio::spawn(consume(Box::new(FailingWriter), rx));
+        let handle = SinkHandle { tx };
+
+        // The first batch is accepted into the channel; the consumer then fails
+        // writing it, stops, and drops the receiver.
+        let _ = handle.send(vec!["{}".to_string()]).await;
+
+        // Once the consumer has stopped, further sends must error rather than
+        // being silently swallowed.
+        let mut rejected = false;
+        for _ in 0..100 {
+            if handle.send(vec!["{}".to_string()]).await.is_err() {
+                rejected = true;
+                break;
+            }
+        }
+        assert!(rejected, "sink should reject records after a write failure");
+        consumer.await.unwrap();
     }
 
     #[tokio::test]
